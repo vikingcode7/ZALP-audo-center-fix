@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import json, socket, threading, webbrowser, os, sqlite3, hashlib, secrets, hmac, time, re
+import json, socket, threading, webbrowser, os, sqlite3, hashlib, secrets, hmac, time, re, urllib.parse, urllib.request, html as html_lib
+from html.parser import HTMLParser
 HOST, PORT = "0.0.0.0", int(os.environ.get("PORT", "8080"))
 DATA = Path(os.environ.get("ZALP_DATA_FILE", str(Path(__file__).resolve().parent / "zalp_web_data" / "database.json")))
 DEFAULT = {"projects":[{"id":"p1","name":"ZALP HOME EDITION","edition":"V1.0","status":"Működő prototípus","amplifier":"ZK-TB21","power":"18 V akkumulátor","cooling":"PS4 ventilátor","notes":""}],"speakers":[],"active":"p1"}
@@ -22,12 +23,21 @@ HTML = """<!doctype html><html lang="hu"><head><meta charset="utf-8"><meta name=
 <label>Jelszó</label><input id="authPass" type="password" autocomplete="current-password" minlength="10" required placeholder="Legalább 10 karakter">
 <button class="primary" id="authSubmit" type="submit">Bejelentkezés</button><div class="result" id="authMessage" aria-live="polite"></div></form>
 <p>Ne használj máshol is használt jelszót. A jelszavadat nem tároljuk olvasható formában.</p>
-</div></div><header><div class="wrap"><div class="brand"><div class="logo">Z</div><div><h1>ZALP WEB COMMAND CENTER v2.0</h1><div class="sub">AUDIO SYSTEMS • LOCAL DASHBOARD</div></div></div><div class="accountbar"><span id="accountLabel">Nincs bejelentkezve</span><button class="secondary" id="logoutBtn" style="display:none" onclick="logout()">Kijelentkezés</button></div><nav><button class="tab active" data-page="home">Áttekintés</button><button class="tab" data-page="audio">Audio Designer</button><button class="tab" data-page="power">Power Station</button><button class="tab" data-page="speakers">Hangszórók</button><button class="tab" data-page="projects">Projektek</button></nav></div></header><main>
+</div></div><header><div class="wrap"><div class="brand"><div class="logo">Z</div><div><h1>ZALP WEB COMMAND CENTER v2.0</h1><div class="sub">AUDIO SYSTEMS • LOCAL DASHBOARD</div></div></div><div class="accountbar"><span id="accountLabel">Nincs bejelentkezve</span><button class="secondary" id="logoutBtn" style="display:none" onclick="logout()">Kijelentkezés</button></div><nav><button class="tab active" data-page="home">Áttekintés</button><button class="tab" data-page="audio">Audio Designer</button><button class="tab" data-page="power">Power Station</button><button class="tab" data-page="speakers">Hangszórók</button><button class="tab" data-page="projects">Projektek</button><button class="tab" data-page="advisor">🤖 AI Audio Advisor</button></nav></div></header><main>
 <section class="page active" id="home"><div class="card"><b style="color:var(--g)">● RENDSZER ONLINE</b><h2>ZALP vezérlőközpont</h2><p class="muted">Projekt- és hangszóró-adatbázis, mobilbarát felület.</p><div class="stats"><div class="stat"><b>v2.0</b><span>Webes dashboard</span></div><div class="stat"><b id="pc">1</b><span>Projekt</span></div><div class="stat"><b id="sc">0</b><span>Hangszóró</span></div></div></div><div class="grid"><div class="card"><h2>Gyorsindítás</h2><p>🔊 Doboz és reflexcső kalkulátor</p><p>⚡ Teljesítmény és üzemidő</p><p>📚 Hangszórók mentése</p><p>🗂️ Több projekt kezelése</p></div><div class="card"><h2>Aktív projekt</h2><div id="summary" class="muted">Betöltés…</div><button class="secondary" onclick="tab('projects')">Projektek kezelése</button></div></div><div class="notice">A fiókod adatai elkülönítve tárolódnak. A szolgáltatás csak a szükséges bejelentkezési munkamenet-sütit használja; analitikai és reklámsütik nincsenek bekapcsolva.</div></section>
 <section class="page" id="audio"><div class="grid"><div class="card"><h2>Doboz térfogata</h2><label>Hossz (cm)</label><input id="len" type="number" value="40"><label>Szélesség (cm)</label><input id="wid" type="number" value="30"><label>Magasság (cm)</label><input id="hei" type="number" value="30"><button class="primary" onclick="volume()">Számítás</button><div class="result" id="vr">Eredmény</div></div><div class="card"><h2>Reflexcső-becslő</h2><label>Nettó térfogat (liter)</label><input id="bv" type="number" value="30"><label>Célfrekvencia (Hz)</label><input id="freq" type="number" value="40"><label>Cső belső átmérője (cm)</label><input id="dia" type="number" value="7"><button class="primary" onclick="port()">Csőhossz becslése</button><div class="result" id="pr">Eredmény</div></div></div><div class="notice">A reflexcsőhossz közelítő becslés; a tényleges hangolás a hangszórótól és dobozkialakítástól is függ.</div></section>
 <section class="page" id="power"><div class="grid"><div class="card"><h2>Teljesítmény</h2><label>Feszültség (V)</label><input id="volt" type="number" value="18"><label>Áramerősség (A)</label><input id="amp" type="number" value="5"><button class="primary" onclick="power()">P = U × I</button><div class="result" id="powr">Eredmény</div></div><div class="card"><h2>Akkumulátor-üzemidő</h2><label>Feszültség (V)</label><input id="bvolt" type="number" value="18"><label>Kapacitás (Ah)</label><input id="ah" type="number" value="4"><label>Fogyasztás (W)</label><input id="load" type="number" value="30"><button class="primary" onclick="battery()">Üzemidő becslése</button><div class="result" id="br">Eredmény</div></div><div class="card"><h2>Ohm-törvény</h2><label>Mit számoljunk?</label><select id="ot"><option value="r">Ellenállás R=U/I</option><option value="i">Áram I=U/R</option><option value="u">Feszültség U=I×R</option></select><label>U (V)</label><input id="ou" type="number" value="12"><label>I (A)</label><input id="oi" type="number" value="2"><label>R (Ω)</label><input id="or" type="number" value="6"><button class="primary" onclick="ohm()">Kiszámítás</button><div class="result" id="orr">Eredmény</div></div></div></section>
 <section class="page" id="speakers"><div class="grid"><div class="card"><h2>Hangszóró-adatlap</h2><label>Megnevezés</label><input id="sn" placeholder="ZALP 10 inch subwoofer"><label>Átmérő (inch)</label><input id="ss" type="number" placeholder="10"><label>Impedancia (Ω)</label><input id="si" type="number" placeholder="4"><label>Névleges teljesítmény (W)</label><input id="sw" type="number" placeholder="200"><label>Megjegyzés</label><textarea id="snote" placeholder="Típus, érzékenység, T/S adatok…"></textarea><button class="primary" onclick="addSpeaker()">Hangszóró mentése</button><div class="result" id="sres"></div></div><div class="card"><h2>Mentett hangszórók</h2><div id="slist" class="empty">Betöltés…</div></div></div></section>
-<section class="page" id="projects"><div class="grid"><div class="card"><h2>Új projekt</h2><label>Projekt neve</label><input id="pn" placeholder="RoadBass RS540W"><label>Verzió</label><input id="pe" placeholder="V1.0"><label>Állapot</label><input id="pst" placeholder="Tervezés alatt"><label>Erősítő</label><input id="pa" placeholder="ZK-TB21"><label>Tápellátás</label><input id="pp" placeholder="18 V akkumulátor"><label>Hűtés</label><input id="pc" placeholder="Ventilátor"><label>Megjegyzések</label><textarea id="pnote"></textarea><button class="primary" onclick="addProject()">Projekt mentése</button><div class="result" id="pres"></div></div><div class="card"><h2>Projektjeim</h2><div id="plist" class="empty">Betöltés…</div></div></div></section></main><footer>ZALP WEB COMMAND CENTER v2.1 • fiókonként elkülönített adatok</footer>
+<section class="page" id="projects"><div class="grid"><div class="card"><h2>Új projekt</h2><label>Projekt neve</label><input id="pn" placeholder="RoadBass RS540W"><label>Verzió</label><input id="pe" placeholder="V1.0"><label>Állapot</label><input id="pst" placeholder="Tervezés alatt"><label>Erősítő</label><input id="pa" placeholder="ZK-TB21"><label>Tápellátás</label><input id="pp" placeholder="18 V akkumulátor"><label>Hűtés</label><input id="pc" placeholder="Ventilátor"><label>Megjegyzések</label><textarea id="pnote"></textarea><button class="primary" onclick="addProject()">Projekt mentése</button><div class="result" id="pres"></div></div><div class="card"><h2>Projektjeim</h2><div id="plist" class="empty">Betöltés…</div></div></div></section>
+<section class="page" id="advisor"><div class="card"><h2>🤖 ZALP AI Audio Advisor</h2><p class="muted">Add meg az igényeidet, majd keress valós webes termékoldalakat. A műszaki ellenőrzés külön értékeli a megadott adatokat; a találatok adatait mindig ellenőrizd a gyártónál.</p>
+<div class="grid"><div><label>Mit keressünk?</label><select id="adCategory"><option value="subwoofer">Mélyhangszóró / mélynyomó</option><option value="midrange">Középhangszóró</option><option value="tweeter">Magassugárzó</option><option value="speaker">Teljes hangszóró</option><option value="amplifier">Erősítő</option><option value="power_supply">Tápegység / tápegységmodul</option></select></div><div><label>Használat</label><select id="adUse"><option value="car audio">Autóhifi</option><option value="home audio">Otthoni hangrendszer</option><option value="DIY audio amplifier">DIY / saját építésű rendszer</option></select></div></div>
+<div class="grid">
+<div><h2>Hangszóró</h2><label>Hangszóró neve</label><input id="adSpeaker" placeholder="Pl. ZALP 10 inch subwoofer"><label>Teljesítmény (W RMS)</label><input id="adSpeakerW" type="number" min="1" value="200"><label>Impedancia (Ω)</label><input id="adSpeakerOhm" type="number" min="1" step="0.5" value="4"><label>Ár</label><input id="adSpeakerPrice" type="number" min="0" value="18000"></div>
+<div><h2>Erősítő és táp</h2><label>Erősítő neve</label><input id="adAmp" placeholder="Pl. ZK-TB21"><label>Kimenő teljesítmény az adott Ω-on (W RMS)</label><input id="adAmpW" type="number" min="1" value="100"><label>Erősítő minimális terhelése (Ω)</label><input id="adAmpMinOhm" type="number" min="1" step="0.5" value="4"><label>Tápfeszültség (V)</label><input id="adVolt" type="number" min="1" value="18"><label>Erősítő megengedett tápfeszültsége (V)</label><div class="grid"><input id="adVmin" aria-label="Minimális tápfeszültség" type="number" min="1" value="12"><input id="adVmax" aria-label="Maximális tápfeszültség" type="number" min="1" value="24"></div><label>Erősítő ára</label><input id="adAmpPrice" type="number" min="0" value="12000"></div>
+</div>
+<div class="grid"><div><label>Költségkeret</label><input id="adBudget" type="number" min="0" value="35000"></div><div><label>Pénznem</label><select id="adCurrency"><option value="HUF">Forint (Ft)</option><option value="EUR">Euró (€)</option></select></div></div>
+<div class="actions"><button class="primary" onclick="getAdvice()">Műszaki párosítás ellenőrzése</button><button class="primary" onclick="searchProducts()">🌐 Termékek keresése a neten</button></div><div class="result" id="adResult" aria-live="polite">Töltsd ki az igényeket, majd válassz keresést.</div><div id="adWebResults"></div>
+<div class="notice">A webes keresés külső termékoldalakat gyűjt össze; nem minden oldal ad vissza árat vagy műszaki adatot. A rendszer nem talál ki hiányzó adatokat. Ez egy webes kereső + műszaki ajánló alapverzió; valódi generatív AI-modell API-ja még nincs bekötve.</div></div></section></main><footer>ZALP WEB COMMAND CENTER v2.2 • AI AUDIO ADVISOR</footer> • fiókonként elkülönített adatok</footer>
 <div id="cookieBanner"><strong>🍪 Süti-beállítások</strong><p>Az oldal a bejelentkezéshez szükséges munkamenet-sütit használ. Jelenleg nem használunk analitikai vagy reklámsütiket. A választásodat ezen az eszközön mentjük el.</p><div class="cookie-actions"><button class="primary" onclick="cookieChoice('necessary')">Csak szükséges sütik</button><button class="secondary" onclick="cookieChoice('all')">Elfogadom</button></div></div>
 <script>
 const $=id=>document.getElementById(id), n=id=>Number($(id).value), f=x=>x.toLocaleString('hu-HU',{maximumFractionDigits:2});
@@ -54,6 +64,8 @@ async function activate(id){try{await api('/api/active',{method:'POST',body:JSON
 async function delProject(id){if(!confirm('Biztosan törlöd a projektet?'))return;try{await api('/api/project-delete',{method:'POST',body:JSON.stringify({id})});refresh()}catch(e){alert(e.message)}}
 async function addSpeaker(){let s={name:$('sn').value.trim(),size:$('ss').value,impedance:$('si').value,watts:$('sw').value,notes:$('snote').value};if(!s.name)return $('sres').textContent='A név kötelező.';try{await api('/api/speakers',{method:'POST',body:JSON.stringify(s)});$('sres').textContent='Hangszóró elmentve!';['sn','ss','si','sw','snote'].forEach(x=>$(x).value='');refresh()}catch(e){$('sres').textContent=e.message}}
 async function delSpeaker(id){if(!confirm('Biztosan törlöd a hangszórót?'))return;try{await api('/api/speaker-delete',{method:'POST',body:JSON.stringify({id})});refresh()}catch(e){alert(e.message)}}
+async function getAdvice(){const ids=['adSpeaker','adSpeakerW','adSpeakerOhm','adSpeakerPrice','adAmp','adAmpW','adAmpMinOhm','adVolt','adVmin','adVmax','adAmpPrice','adBudget','adCurrency'];const d={};ids.forEach(id=>d[id]=$(id).value);$('adResult').textContent='Elemzés…';try{const r=await api('/api/advisor',{method:'POST',body:JSON.stringify(d)});$('adResult').textContent=r.summary}catch(e){$('adResult').textContent=e.message}}
+async function searchProducts(){const d={category:$('adCategory').value,use:$('adUse').value,budget:$('adBudget').value,currency:$('adCurrency').value,voltage:$('adVolt').value,ohms:$('adSpeakerOhm').value,watts:$('adSpeakerW').value,ampWatts:$('adAmpW').value};$('adWebResults').innerHTML='<div class="result">Keresés a weben…</div>';$('adResult').textContent='Keresési igény összeállítása…';try{const r=await api('/api/product-search',{method:'POST',body:JSON.stringify(d)});$('adResult').textContent=r.note;$('adWebResults').innerHTML=r.results.length?r.results.map(x=>`<div class="item"><strong>${esc(x.title)}</strong><p>${esc(x.snippet||'A találatban nincs leírás.')}</p><a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">Termékoldal megnyitása ↗</a></div>`).join(''):'<div class="empty">Nem találtunk feldolgozható termékoldalt. Próbáld újra más kulcsszavakkal.</div>'}catch(e){$('adWebResults').innerHTML='';$('adResult').textContent='A webes keresés most nem sikerült: '+e.message}}
 async function boot(){initCookies();try{let j=await api('/api/me');currentUser=j.username;$('accountLabel').textContent='Bejelentkezve: '+j.username;$('logoutBtn').style.display='inline-block';hideAuth();await refresh();}catch(e){showAuth();}}
 boot();
 </script></body></html>"""
@@ -172,6 +184,65 @@ def origin_ok(handler):
     try: return urlparse(origin).netloc.lower() == handler.headers.get("Host", "").lower()
     except Exception: return False
 
+class SearchResultsParser(HTMLParser):
+    """Small, dependency-free parser for DuckDuckGo HTML search results."""
+    def __init__(self):
+        super().__init__(); self.results=[]; self.current=None; self.capture=None
+    def handle_starttag(self, tag, attrs):
+        a=dict(attrs)
+        classes=a.get("class", "")
+        if tag == "a" and "result__a" in classes.split():
+            self.current={"url":a.get("href", ""), "title":"", "snippet":""}; self.capture="title"
+        elif self.current is not None and tag in ("a", "div") and "result__snippet" in classes.split():
+            self.capture="snippet"
+    def handle_data(self, data):
+        if self.current is not None and self.capture in ("title", "snippet"):
+            self.current[self.capture] += data
+    def handle_endtag(self, tag):
+        if self.current is not None and tag == "a" and self.capture == "title":
+            if self.current.get("url", "").startswith("http") and self.current.get("title", "").strip():
+                self.results.append({k:html_lib.unescape(v).strip() for k,v in self.current.items()})
+            self.current=None; self.capture=None
+        elif self.current is not None and tag == "div" and self.capture == "snippet":
+            self.capture=None
+
+def search_web_products(data):
+    categories={"subwoofer":"subwoofer mélynyomó hangszóró", "midrange":"közép hangszóró midrange driver", "tweeter":"magassugárzó tweeter", "speaker":"hangszóró driver", "amplifier":"audio erősítő amplifier", "power_supply":"tápegység kapcsolóüzemű tápegység"}
+    category=str(data.get("category", "subwoofer")); category=category if category in categories else "subwoofer"
+    use=str(data.get("use", "DIY audio"))[:40]
+    currency=str(data.get("currency", "HUF")); currency=currency if currency in ("HUF", "EUR") else "HUF"
+    try: budget=max(0,float(data.get("budget",0)))
+    except (TypeError,ValueError): budget=0
+    try: voltage=max(0,float(data.get("voltage",0)))
+    except (TypeError,ValueError): voltage=0
+    try: ohms=max(0,float(data.get("ohms",0)))
+    except (TypeError,ValueError): ohms=0
+    try: watts=max(0,float(data.get("watts",0)))
+    except (TypeError,ValueError): watts=0
+    try: amp_watts=max(0,float(data.get("ampWatts",0)))
+    except (TypeError,ValueError): amp_watts=0
+    terms=[categories[category], use]
+    if category in ("amplifier", "power_supply") and voltage: terms.append(f"{voltage:g}V")
+    if category in ("subwoofer","midrange","tweeter","speaker") and ohms: terms.append(f"{ohms:g} ohm")
+    if category in ("subwoofer","midrange","tweeter","speaker") and watts: terms.append(f"{watts:g}W RMS")
+    if category=="amplifier" and amp_watts: terms.append(f"{amp_watts:g}W RMS")
+    terms.append("ár" if currency=="HUF" else "price EUR")
+    if budget: terms.append(f"under {budget:g} {currency}")
+    query=" ".join(terms)
+    url="https://html.duckduckgo.com/html/?"+urllib.parse.urlencode({"q":query,"kl":"hu-hu"})
+    req=urllib.request.Request(url,headers={"User-Agent":"Mozilla/5.0 (compatible; ZALPAudioAdvisor/1.0)","Accept-Language":"hu-HU,hu;q=0.9,en;q=0.7"})
+    with urllib.request.urlopen(req,timeout=12) as response:
+        page=response.read(1_500_000).decode("utf-8","replace")
+    parser=SearchResultsParser(); parser.feed(page)
+    seen=set(); results=[]
+    for item in parser.results:
+        target=item["url"]
+        if target in seen: continue
+        seen.add(target)
+        results.append({"title":item["title"][:220],"url":target,"snippet":item.get("snippet","")[:500]})
+        if len(results)>=8: break
+    return query, results
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
@@ -238,6 +309,57 @@ class Handler(BaseHTTPRequestHandler):
             user = get_session_user(self)
             if not user: return send_json(self, {"error":"Bejelentkezés szükséges."}, 401)
             db=load_user_db(user["id"])
+            if path=="/api/product-search":
+                try:
+                    query, results = search_web_products(data)
+                except Exception as exc:
+                    print("[ZALP SEARCH]", type(exc).__name__, str(exc)[:250])
+                    return send_json(self,{"error":"A külső webes kereső nem érhető el most. Próbáld újra később."},502)
+                note="Keresés: "+query+"\n\nA találatok külső webes keresésből származnak. Az ár, készlet, RMS-teljesítmény, impedancia és feszültségtartomány a termékoldalon ellenőrizendő; a keresőtalálat önmagában nem igazolja a kompatibilitást."
+                return send_json(self,{"ok":True,"query":query,"note":note,"results":results})
+            if path=="/api/advisor":
+                def num(key):
+                    try: return float(data.get(key, 0))
+                    except (TypeError, ValueError): return 0.0
+                sw=num("adSpeakerW"); so=num("adSpeakerOhm"); sp=num("adSpeakerPrice")
+                aw=num("adAmpW"); amin=num("adAmpMinOhm"); volt=num("adVolt")
+                vmin=num("adVmin"); vmax=num("adVmax"); ap=num("adAmpPrice"); budget=num("adBudget")
+                currency=str(data.get("adCurrency","HUF"))
+                if currency not in ("HUF","EUR"): currency="HUF"
+                if min(sw,so,sp,aw,amin,volt,vmin,vmax,ap,budget) < 0 or min(sw,so,aw,amin,volt,vmin,vmax) <= 0:
+                    return send_json(self,{"error":"Ellenőrizd a számokat: a teljesítmény, impedancia és feszültség legyen pozitív."},400)
+                speaker=str(data.get("adSpeaker","Hangszóró")).strip()[:120] or "Hangszóró"
+                amp=str(data.get("adAmp","Erősítő")).strip()[:120] or "Erősítő"
+                issues=[]; good=[]
+                if so < amin:
+                    issues.append(f"VESZÉLY: a hangszóró {so:g} Ω-os terhelése kisebb, mint az erősítő {amin:g} Ω minimális terhelése. Így ne kösd össze.")
+                else: good.append(f"Impedancia: {so:g} Ω megfelel az erősítő legalább {amin:g} Ω-os terhelési határának.")
+                if not (vmin <= volt <= vmax):
+                    issues.append(f"Feszültség: a megadott {volt:g} V kívül esik az erősítő {vmin:g}–{vmax:g} V tartományán.")
+                else: good.append(f"Tápfeszültség: {volt:g} V a megadott {vmin:g}–{vmax:g} V tartományon belül van.")
+                ratio=aw/sw
+                if aw > sw:
+                    issues.append(f"Az erősítő megadott {aw:g} W RMS teljesítménye nagyobb a hangszóró {sw:g} W RMS terhelhetőségénél; óvatos beállítás és limiter ajánlott.")
+                elif ratio >= 0.5:
+                    good.append(f"Teljesítmény: {aw:g} W RMS erősítőteljesítmény a {sw:g} W RMS hangszóró-terhelhetőség {ratio*100:.0f}%-a.")
+                else:
+                    issues.append(f"Az erősítő a hangszóró névleges teljesítményének csak {ratio*100:.0f}%-át adja le a megadott adatok szerint; a kívánt hangerőhöz kevés lehet.")
+                total=sp+ap
+                if total > budget: issues.append(f"Költségkeret: az összesen {total:,.2f} {currency} ár túllépi a {budget:,.2f} {currency} keretet.".replace(",", " "))
+                else: good.append(f"Ár: összesen {total:,.2f} {currency}, a keretből {budget-total:,.2f} {currency} marad.".replace(",", " "))
+                score=100
+                if so < amin: score-=60
+                if not (vmin <= volt <= vmax): score-=35
+                if aw > sw: score-=20
+                elif ratio < .5: score-=15
+                if total > budget: score-=15
+                score=max(0,min(100,score))
+                lines=[f"ZALP AI AUDIO ADVISOR — {speaker} + {amp}",f"Kompatibilitási pontszám: {score}/100",f"Ár/teljesítmény (hangszóró): {sp/sw:.2f} {currency}/W RMS",f"Ár/teljesítmény (erősítő): {ap/aw:.2f} {currency}/W RMS",""]
+                if good: lines.append("MEGFELELŐ:")
+                lines.extend("✓ "+x for x in good)
+                if issues: lines.extend(["","FIGYELMEZTETÉSEK:"]+["⚠ "+x for x in issues])
+                lines.extend(["","ÖSSZEGZÉS: "+("A párosítás a megadott adatok alapján elfogadhatónak tűnik, de ellenőrizd a gyártói adatlapokat." if score>=80 and not any("VESZÉLY" in x or "kívül esik" in x for x in issues) else "Ezt a párosítást ne tekintsd automatikusan biztonságosnak; ellenőrizd az erősítő adatlapját, a bekötést és a valós RMS-adatokat.")])
+                return send_json(self,{"ok":True,"score":score,"summary":"\\n".join(lines)})
             if path=="/api/projects":
                 name=str(data.get("name","")).strip()[:120]
                 if not name: return send_json(self,{"error":"A projekt neve kötelező."},400)
