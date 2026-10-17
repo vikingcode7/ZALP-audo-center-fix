@@ -37,7 +37,7 @@ HTML = """<!doctype html><html lang="hu"><head><meta charset="utf-8"><meta name=
 </div>
 <div class="grid"><div><label>Költségkeret</label><input id="adBudget" type="number" min="0" value="35000"></div><div><label>Pénznem</label><select id="adCurrency"><option value="HUF">Forint (Ft)</option><option value="EUR">Euró (€)</option></select></div></div>
 <div class="actions"><button class="primary" onclick="getAdvice()">Műszaki párosítás ellenőrzése</button><button class="primary" onclick="searchProducts()">🌐 Termékek keresése a neten</button></div><div class="result" id="adResult" aria-live="polite">Töltsd ki az igényeket, majd válassz keresést.</div><div id="adWebResults"></div>
-<div class="notice">A webes keresés külső termékoldalakat gyűjt össze; nem minden oldal ad vissza árat vagy műszaki adatot. A rendszer nem talál ki hiányzó adatokat. Ez egy webes kereső + műszaki ajánló alapverzió; valódi generatív AI-modell API-ja még nincs bekötve.</div></div></section></main><footer>ZALP WEB COMMAND CENTER v2.2 • AI AUDIO ADVISOR</footer> • fiókonként elkülönített adatok</footer>
+<div class="notice">A webes keresés külső termékoldalakat gyűjt össze; nem minden oldal ad vissza árat vagy műszaki adatot. A rendszer nem talál ki hiányzó adatokat. Az AI-magyarázathoz az OPENAI_API_KEY szerverkörnyezeti változó szükséges. A termékadatokat mindig ellenőrizd a gyártói adatlapokon.</div></div></section></main><footer>ZALP WEB COMMAND CENTER v2.2 • AI AUDIO ADVISOR</footer> • fiókonként elkülönített adatok</footer>
 <div id="cookieBanner"><strong>🍪 Süti-beállítások</strong><p>Az oldal a bejelentkezéshez szükséges munkamenet-sütit használ. Jelenleg nem használunk analitikai vagy reklámsütiket. A választásodat ezen az eszközön mentjük el.</p><div class="cookie-actions"><button class="primary" onclick="cookieChoice('necessary')">Csak szükséges sütik</button><button class="secondary" onclick="cookieChoice('all')">Elfogadom</button></div></div>
 <script>
 const $=id=>document.getElementById(id), n=id=>Number($(id).value), f=x=>x.toLocaleString('hu-HU',{maximumFractionDigits:2});
@@ -241,7 +241,83 @@ def search_web_products(data):
         seen.add(target)
         results.append({"title":item["title"][:220],"url":target,"snippet":item.get("snippet","")[:500]})
         if len(results)>=8: break
+    # If DuckDuckGo changes its HTML or blocks automated requests, still return a useful clickable search link.
+    if not results:
+        fallback_url = "https://www.google.com/search?" + urllib.parse.urlencode({"q": query})
+        results.append({
+            "title": "Google keresési találatok megnyitása",
+            "url": fallback_url,
+            "snippet": "A beépített kereső most nem tudta feldolgozni a találatokat. Ezzel a hivatkozással megnyithatod ugyanazt a keresést a Google-ben."
+        })
     return query, results
+
+
+def openai_explain_advice(inputs, deterministic_summary):
+    """Optional AI explanation. The API key is read only from the server environment."""
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return None, "Az OPENAI_API_KEY nincs beállítva a szerveren."
+    prompt_data = {
+        "megadott_adatok": inputs,
+        "szabalyalapu_muszaki_ellenorzes": deterministic_summary,
+    }
+    body = {
+        "model": os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Te vagy a ZALP Audio Advisor magyar nyelvű műszaki segítője. "
+                    "A szabályalapú ellenőrzést magyarázd el közérthetően és tömören. "
+                    "Ne írj felül veszélyes figyelmeztetést, ne találj ki gyártói adatokat, "
+                    "és jelezd, hogy a megadott teljesítmény/impedancia/feszültség adatait "
+                    "a gyártói adatlapból ellenőrizni kell. Ha egy adat hiányzik, mondd ki. "
+                    "Különítsd el a biztos következtetést a becsléstől."
+                )
+            },
+            {
+                "role": "user",
+                "content": "Készíts rövid, hasznos magyar magyarázatot ezekből az adatokból:\n"
+                           + json.dumps(prompt_data, ensure_ascii=False)
+            }
+        ],
+        "temperature": 0.2,
+        "max_tokens": 450
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=25) as response:
+            payload = json.loads(response.read(1_000_000).decode("utf-8", "replace"))
+        content = payload["choices"][0]["message"]["content"]
+        if isinstance(content, str) and content.strip():
+            return content.strip()[:6000], None
+        return None, "Az AI nem adott szöveges választ."
+    except urllib.error.HTTPError as exc:
+        # Do not log or return the secret key or the full provider response.
+        detail = ""
+        try:
+            err = json.loads(exc.read(20000).decode("utf-8", "replace"))
+            detail = str(err.get("error", {}).get("message", ""))[:240]
+        except Exception:
+            pass
+        print("[ZALP OPENAI] HTTP", exc.code, detail)
+        if exc.code in (401, 403):
+            return None, "Az OpenAI-kulcs vagy annak jogosultsága nem engedélyezi a kérést. Ellenőrizd a kulcsot és a modellhozzáférést."
+        if exc.code == 429:
+            return None, "Az OpenAI API kvótája vagy sebességkorlátja miatt most nem sikerült az AI-válasz. Ellenőrizd az API számlázását és limitjeit."
+        return None, f"Az OpenAI API hibát jelzett (HTTP {exc.code})."
+    except Exception as exc:
+        print("[ZALP OPENAI] ", type(exc).__name__, str(exc)[:200])
+        return None, "Az AI-szolgáltatás most nem érhető el. A szabályalapú ellenőrzés ettől még használható."
+
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -359,7 +435,14 @@ class Handler(BaseHTTPRequestHandler):
                 lines.extend("✓ "+x for x in good)
                 if issues: lines.extend(["","FIGYELMEZTETÉSEK:"]+["⚠ "+x for x in issues])
                 lines.extend(["","ÖSSZEGZÉS: "+("A párosítás a megadott adatok alapján elfogadhatónak tűnik, de ellenőrizd a gyártói adatlapokat." if score>=80 and not any("VESZÉLY" in x or "kívül esik" in x for x in issues) else "Ezt a párosítást ne tekintsd automatikusan biztonságosnak; ellenőrizd az erősítő adatlapját, a bekötést és a valós RMS-adatokat.")])
-                return send_json(self,{"ok":True,"score":score,"summary":"\\n".join(lines)})
+                deterministic_summary="\\n".join(lines)
+                ai_text, ai_error = openai_explain_advice(data, deterministic_summary)
+                final_summary = deterministic_summary
+                if ai_text:
+                    final_summary += "\\n\\nAI MAGYARÁZAT:\\n" + ai_text
+                elif ai_error:
+                    final_summary += "\\n\\nAI MAGYARÁZAT: " + ai_error + " A fenti szabályalapú ellenőrzés ettől még használható."
+                return send_json(self,{"ok":True,"score":score,"summary":final_summary,"ai_enabled":bool(ai_text)})
             if path=="/api/projects":
                 name=str(data.get("name","")).strip()[:120]
                 if not name: return send_json(self,{"error":"A projekt neve kötelező."},400)
